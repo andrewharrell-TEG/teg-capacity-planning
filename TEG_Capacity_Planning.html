@@ -738,6 +738,20 @@
   .planner-grid-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .planner-grid-table th, .planner-grid-table td { border: 1px solid var(--border); padding: 4px 6px; vertical-align: middle; }
   .planner-grid-table th { background: var(--bg); font-weight: 600; }
+  #view-projplanner { max-width: 100%; overflow-x: hidden; }
+  #view-projplanner .card { max-width: 100%; }
+  #planner-phases-body { overflow-x: auto; }
+  .planner-people-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--teal); color: #fff;
+    padding: 3px 10px 3px 10px; border-radius: 20px;
+    font-size: 12px; font-weight: 500; white-space: nowrap;
+  }
+  .planner-people-chip button {
+    background: none; border: none; color: #fff; font-size: 15px;
+    cursor: pointer; padding: 0 0 0 3px; line-height: 1; opacity: 0.8;
+  }
+  .planner-people-chip button:hover { opacity: 1; }
 
   .week-header { writing-mode: horizontal-tb; font-size: 10px; }
 
@@ -1932,9 +1946,22 @@
 
         <!-- Hours Grid -->
         <div class="card">
-          <div class="card-header" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
-            <div class="card-title">Projected Hours by Person</div>
-            <div style="font-size:12px;color:var(--text-muted)">Gray = remaining weekly capacity across all projects</div>
+          <div class="card-header" style="justify-content:space-between;flex-wrap:wrap;gap:12px;align-items:flex-start">
+            <div>
+              <div class="card-title">Projected Hours by Person</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Gray = remaining weekly capacity &middot; People with hours always shown</div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+              <div id="planner-people-chips" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>
+              <div class="planner-search-wrap" style="width:210px">
+                <input id="planner-people-inp" class="planner-search-inp" type="text"
+                  placeholder="&#xFF0B; Add person to view..."
+                  oninput="renderPlannerPeopleSearch(this.value)"
+                  onfocus="renderPlannerPeopleSearch(this.value)"
+                  onblur="setTimeout(function(){var l=document.getElementById('planner-people-list');if(l)l.classList.remove('open');},160)">
+                <div id="planner-people-list" class="planner-search-list"></div>
+              </div>
+            </div>
           </div>
           <div class="card-body" style="padding:0">
             <div id="planner-grid-wrap" class="table-wrap"></div>
@@ -6847,6 +6874,7 @@ function renderPlannerSearch(q) {
 
 function selectPlannerProject(projId) {
   _plannerProjId = String(projId);
+  _plannerPeopleFilter = new Set(); // reset filter on project change
   var proj = (data.projects || []).find(function(p){ return String(p.projId) === _plannerProjId; });
   var inp = document.getElementById('planner-search-inp');
   if (inp && proj) inp.value = '#' + proj.projId + '  ' + (proj.projName || '');
@@ -6886,6 +6914,7 @@ function renderPlannerContent() {
   if (titleEl) titleEl.innerHTML = '#' + escHtml(String(projIdDisp)) + ' &mdash; ' + escHtml(projName);
   renderPlannerPhases(phases);
   renderPlannerMilestones(milestones);
+  renderPlannerPeopleChips();
   renderPlannerGrid(phases);
 }
 
@@ -7031,6 +7060,75 @@ function deleteMilestoneFromPlanner(id) {
   );
 }
 
+// People explicitly added to the planner view (in addition to those with hours)
+var _plannerPeopleFilter = new Set();
+
+function renderPlannerPeopleChips() {
+  var container = document.getElementById('planner-people-chips');
+  if (!container) return;
+  var chips = '';
+  _plannerPeopleFilter.forEach(function(pid) {
+    var person = (data.people || []).find(function(p){ return p.id === pid; });
+    var name = person ? person.name : pid;
+    chips += '<span class="planner-people-chip">' + escHtml(name)
+      + '<button onclick="removePersonFromPlanner(' + "'" + pid + "'" + ')" title="Remove from view">&times;</button></span>';
+  });
+  container.innerHTML = chips;
+}
+
+function renderPlannerPeopleSearch(q) {
+  var list = document.getElementById('planner-people-list');
+  if (!list) return;
+  var q2 = (q || '').toLowerCase().trim();
+  var activePeople = (data.people || []).filter(function(p){ return p.active === 'Yes'; });
+  // Find people already showing because they have hours on this project
+  var phases = _plannerProjId ? data.projects.filter(function(p){ return String(p.projId) === _plannerProjId; }) : [];
+  var projPhaseKeys = new Set(phases.map(function(ph){ return ph._phaseKey; }));
+  var withHours = new Set(
+    Object.keys(data.assignments || {}).filter(function(k) {
+      var parts = k.split('|');
+      return projPhaseKeys.has(parts[1]) && (data.assignments[k] || 0) > 0;
+    }).map(function(k){ return k.split('|')[0]; })
+  );
+  // Candidates: active, not already showing, matches query
+  var candidates = activePeople.filter(function(p) {
+    return !withHours.has(p.id) && !_plannerPeopleFilter.has(p.id)
+      && (q2 === '' || p.name.toLowerCase().includes(q2)
+          || (p.title||'').toLowerCase().includes(q2)
+          || (p.team||'').toLowerCase().includes(q2));
+  });
+  if (candidates.length === 0) {
+    list.innerHTML = '<div class="planner-search-empty">' + (q2 ? 'No matching people' : 'All active people already shown') + '</div>';
+  } else {
+    list.innerHTML = candidates.map(function(p) {
+      return '<div class="planner-search-item" onmousedown="addPersonToPlanner(' + "'" + p.id + "'" + ')">'
+        + '<span class="planner-search-id">' + escHtml(p.team||'') + '</span>'
+        + '<span class="planner-search-name">' + escHtml(p.name) + '</span>'
+        + '<span style="font-size:11px;color:var(--text-muted);margin-left:auto">' + escHtml(p.title||'') + '</span>'
+        + '</div>';
+    }).join('');
+  }
+  list.classList.add('open');
+}
+
+function addPersonToPlanner(personId) {
+  _plannerPeopleFilter.add(personId);
+  var inp = document.getElementById('planner-people-inp');
+  if (inp) inp.value = '';
+  var list = document.getElementById('planner-people-list');
+  if (list) list.classList.remove('open');
+  renderPlannerPeopleChips();
+  var phases = data.projects.filter(function(p){ return String(p.projId) === _plannerProjId; });
+  renderPlannerGrid(phases);
+}
+
+function removePersonFromPlanner(personId) {
+  _plannerPeopleFilter.delete(personId);
+  renderPlannerPeopleChips();
+  var phases = data.projects.filter(function(p){ return String(p.projId) === _plannerProjId; });
+  renderPlannerGrid(phases);
+}
+
 function renderPlannerGrid(phases) {
   var container = document.getElementById('planner-grid-wrap');
   if (!container) return;
@@ -7062,10 +7160,24 @@ function renderPlannerGrid(phases) {
   if (weeks.length === 0) weeks.push(getCurrentWeek());
   var curWeek = getCurrentWeek();
 
-  // Group active people by team
+  // Show: (a) people with hours on any phase of this project, (b) people added via filter
   var activePeople = (data.people || []).filter(function(p){ return p.active === 'Yes'; });
+  var projPhaseKeySet = new Set(phases.map(function(ph){ return ph._phaseKey; }));
+  var withHoursPids = new Set(
+    Object.keys(data.assignments || {}).filter(function(k) {
+      var parts = k.split('|');
+      return projPhaseKeySet.has(parts[1]) && (data.assignments[k] || 0) > 0;
+    }).map(function(k){ return k.split('|')[0]; })
+  );
+  var visiblePeople = activePeople.filter(function(p){
+    return withHoursPids.has(p.id) || _plannerPeopleFilter.has(p.id);
+  });
+  if (visiblePeople.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px">No hours projected yet &mdash; use &ldquo;Add person to view&rdquo; above to start planning.</div>';
+    return;
+  }
   var teamMap = {};
-  activePeople.forEach(function(p) {
+  visiblePeople.forEach(function(p) {
     var t = p.team || 'Unassigned';
     if (!teamMap[t]) teamMap[t] = [];
     teamMap[t].push(p);
