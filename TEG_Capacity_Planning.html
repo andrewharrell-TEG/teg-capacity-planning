@@ -64,6 +64,8 @@
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
+  html { overflow-x: hidden; }
+
   body {
     font-family: 'Figtree', sans-serif;
     background: var(--bg);
@@ -71,6 +73,7 @@
     display: flex;
     min-height: 100vh;
     font-size: 14px;
+    overflow-x: hidden;
   }
 
   /* ---- PROJECTS FLAT TABLE ---- */
@@ -355,6 +358,8 @@
     display: flex;
     flex-direction: column;
     min-height: 100vh;
+    min-width: 0;
+    overflow-x: hidden;
   }
 
   .topbar {
@@ -1983,8 +1988,8 @@
             <div class="card-title">Permit Tracker</div>
             <button class="btn btn-secondary btn-sm" onclick="addPermit()">&#xFF0B; Add Permit</button>
           </div>
-          <div class="card-body" style="padding:0">
-            <div id="planner-permits-body"></div>
+          <div class="card-body" style="padding:0;overflow-x:auto">
+            <div id="planner-permits-body" style="min-width:580px"></div>
           </div>
         </div>
 
