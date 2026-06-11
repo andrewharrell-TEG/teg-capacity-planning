@@ -2437,7 +2437,7 @@ const _msalApp = new msal.PublicClientApplication({
   },
   cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
 });
-_msalApp.handleRedirectPromise().catch(console.error);
+// handleRedirectPromise is called once at startup below, not here
 
 const _SP_SCOPES = ['https://eastgroupcom.sharepoint.com/.default'];
 let _cachedToken = null, _tokenExpiry = 0;
@@ -7594,7 +7594,14 @@ async function init() {
   }
 }
 
-init();
+(async function startup() {
+  try { await _msalApp.handleRedirectPromise(); } catch(e) { console.error('handleRedirectPromise error:', e); }
+  // Bail out if this page is running inside MSAL's auth popup
+  const _urlP = new URLSearchParams(window.location.search);
+  if ((window.opener && window.opener !== window) ||
+      _urlP.has('code') || _urlP.has('error_description') || _urlP.has('error')) return;
+  init();
+})();
 </script>
 </body>
 </html>
