@@ -738,6 +738,39 @@
   .planner-grid-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .planner-grid-table th, .planner-grid-table td { border: 1px solid var(--border); padding: 4px 6px; vertical-align: middle; }
   .planner-grid-table th { background: var(--bg); font-weight: 600; }
+  /* ---- PERMIT TRACKER ---- */
+  .permit-row { border-bottom: 1px solid var(--border); }
+  .permit-row:last-child { border-bottom: none; }
+  .permit-summary {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    cursor: pointer; user-select: none;
+  }
+  .permit-summary:hover { background: var(--bg-hover); }
+  .permit-toggle { color: var(--text-muted); font-size: 10px; width: 12px; flex-shrink: 0; }
+  .permit-name-col { font-weight: 600; font-size: 13px; width: 160px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .permit-agency-col { font-size: 12px; color: var(--text-muted); width: 130px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .permit-bar-col { flex: 1; min-width: 120px; }
+  .permit-bar-dates { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-bottom: 3px; }
+  .permit-bar-track { position: relative; height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; }
+  .permit-bar-seg { position: absolute; top: 0; height: 100%; }
+  .permit-bar-today { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--orange); z-index: 2; }
+  .permit-duration-col { font-size: 12px; color: var(--text-muted); white-space: nowrap; width: 48px; text-align: right; flex-shrink: 0; }
+  .permit-status-select {
+    font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px;
+    border: 1.5px solid var(--border); cursor: pointer; outline: none;
+    width: 130px; flex-shrink: 0; font-family: 'Figtree', sans-serif;
+  }
+  .permit-s-none    { background: #f3f3f3; color: #888; border-color: #ddd; }
+  .permit-s-hold    { background: rgba(241,160,31,0.12); color: #c47a00; border-color: var(--orange); }
+  .permit-s-active  { background: rgba(0,112,108,0.1); color: var(--teal); border-color: var(--teal); }
+  .permit-s-done    { background: rgba(40,167,69,0.12); color: #1e7e34; border-color: #28a745; }
+  .permit-detail { padding: 14px 16px 16px 36px; border-top: 1px solid var(--bg); background: rgba(0,0,0,0.01); }
+  .permit-detail-grid { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .permit-subtask-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--bg); }
+  .permit-subtask-bar-wrap { flex: 1; min-width: 60px; }
+  .permit-subtask-track { position: relative; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .permit-subtask-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 3px; }
+  .permit-add-subtask { display: flex; gap: 8px; align-items: center; padding: 10px 0 4px; }
   #view-projplanner { max-width: 100%; overflow-x: hidden; }
   #view-projplanner .card { max-width: 100%; }
   #planner-phases-body { overflow-x: auto; }
@@ -1944,6 +1977,17 @@
           <div class="card-body"><div id="planner-milestones-body"></div></div>
         </div>
 
+        <!-- Permit Tracker -->
+        <div class="card" style="margin-bottom:20px">
+          <div class="card-header" style="justify-content:space-between">
+            <div class="card-title">Permit Tracker</div>
+            <button class="btn btn-secondary btn-sm" onclick="addPermit()">&#xFF0B; Add Permit</button>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div id="planner-permits-body"></div>
+          </div>
+        </div>
+
         <!-- Hours Grid -->
         <div class="card">
           <div class="card-header" style="justify-content:space-between;flex-wrap:wrap;gap:12px;align-items:flex-start">
@@ -2436,7 +2480,7 @@ async function _getFormDigest() {
 // SP item ID caches (business key &rarr; SP integer item ID)
 const _spIds = {
   settings: {}, people: {}, roles: {}, projects: {},
-  assignments: {}, vacation: {}, milestones: {}
+  assignments: {}, vacation: {}, milestones: {}, permits: {}
 };
 let _spBudgetIds = []; // parallel array to data.budgets[]
 
@@ -2573,6 +2617,18 @@ function _assembleMilestones(items) {
   });
 }
 
+function _assemblePermits(items) {
+  return items.map(i => {
+    _spIds.permits[i.permitId] = i.id;
+    var subtasks = [];
+    try { subtasks = JSON.parse(i.subtasksJson || '[]'); } catch(e) {}
+    return { id: i.permitId, projId: i.projId, name: i.permitName || '',
+             agency: i.agency || '', openedDate: i.openedDate || '',
+             status: i.status || 'In Progress', note: i.note || '',
+             subtasks: subtasks };
+  });
+}
+
 // ============================================================
 // DATA SERIALIZERS  (app model &rarr; SP item body)
 // ============================================================
@@ -2592,6 +2648,10 @@ const _toSP = {
   vacation:  v => ({ Title: v.id, vacId: v.id, personId: v.personId, vacDate: v.date, hours: v.hours }),
   milestone: m => ({ Title: m.id, milestoneId: m.id, projId: String(m.projId || ''),
                      msDate: m.date, label: m.label || '', notes: m.notes || '' }),
+  permit:    p => ({ Title: p.id, permitId: p.id, projId: String(p.projId || ''),
+                     permitName: p.name || '', agency: p.agency || '',
+                     openedDate: p.openedDate || '', status: p.status || 'In Progress',
+                     note: p.note || '', subtasksJson: JSON.stringify(p.subtasks || []) }),
   setting:   (key, val) => ({ Title: key, key: key, value: String(val) })
 };
 
@@ -2646,7 +2706,7 @@ function phaseKey() {
 
 async function loadData() {
   try {
-    const [sItems, pItems, rItems, prItems, bItems, aItems, vItems, mItems] = await Promise.all([
+    const [sItems, pItems, rItems, prItems, bItems, aItems, vItems, mItems, ptItems] = await Promise.all([
       _spGetAll('Settings'),
       _spGetAll('People'),
       _spGetAll('Roles'),
@@ -2654,7 +2714,8 @@ async function loadData() {
       _spGetAll('Budgets'),
       _spGetAll('Assignments'),
       _spGetAll('Vacation'),
-      _spGetAll('Milestones'),
+            _spGetAll('Milestones'),
+      _spGetAll('Permits').catch(() => []),
     ]);
     const d = {
       settings:   _assembleSettings(sItems),
@@ -2664,7 +2725,8 @@ async function loadData() {
       budgets:    _assembleBudgets(bItems),
       assignments:_assembleAssignments(aItems),
       vacation:   _assembleVacation(vItems),
-      milestones: _assembleMilestones(mItems),
+            milestones: _assembleMilestones(mItems),
+      permits:    _assemblePermits(ptItems),
     };
     // Normalisation guards &mdash; harmless on SP data, kept for safety
     // ---- Step 1: ensure every project record has a _phaseKey ----
@@ -2773,7 +2835,7 @@ async function _syncToSP() {
   setSyncIndicator('saving');
   const curr = data;
   const prev = _spSnapshot || { people:[], roles:[], projects:[], budgets:[],
-                                 assignments:{}, vacation:[], milestones:[], settings:{} };
+                                 assignments:{}, vacation:[], milestones:[], permits:[], settings:{} };
   try {
     await Promise.all([
       _syncSettings  (prev.settings   || {}, curr.settings   || {}),
@@ -2783,6 +2845,7 @@ async function _syncToSP() {
       _syncAssignments(prev.assignments || {}, curr.assignments || {}),
       _syncArrayList ('Vacation',  prev.vacation   || [], curr.vacation   || [], 'id',        _toSP.vacation,  _spIds.vacation),
       _syncArrayList ('Milestones',prev.milestones || [], curr.milestones || [], 'id',        _toSP.milestone, _spIds.milestones),
+      _syncArrayList ('Permits',   prev.permits    || [], curr.permits    || [], 'id',        _toSP.permit,    _spIds.permits),
     ]);
     await _syncBudgets(prev.budgets || [], curr.budgets || []);
     _spSnapshot = JSON.parse(JSON.stringify(curr));
@@ -6825,6 +6888,221 @@ async function _refreshData() {
   }
 }
 
+
+// ============================================================
+// PERMIT TRACKER
+// ============================================================
+
+function permitKey() { return 'pt_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function subtaskKey() { return 'st_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+
+var _permitSegColors = ['#00706C','#009688','#005958','#00A98E','#007a6e','#2bb5a0'];
+var _expandedPermits = new Set();
+
+function _permitDaysBetween(a, b) {
+  return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
+}
+
+function _permitStatusClass(s) {
+  if (s === 'Not Needed')      return 'permit-s-none';
+  if (s === 'On Hold')         return 'permit-s-hold';
+  if (s === 'Permit Received') return 'permit-s-done';
+  return 'permit-s-active';
+}
+
+function _permitDuration(permit) {
+  var subs = (permit.subtasks || []).slice().sort(function(a,b){ return (a.endDate||'') < (b.endDate||'') ? -1 : 1; });
+  if (!permit.openedDate) return '';
+  var endDate = '';
+  for (var i = 0; i < subs.length; i++) { if (subs[i].name === 'Permit Received') { endDate = subs[i].endDate; break; } }
+  if (!endDate && subs.length > 0) endDate = subs[subs.length-1].endDate;
+  if (!endDate) return '';
+  return _permitDaysBetween(permit.openedDate, endDate) + 'd';
+}
+
+function _renderPermitBar(permit) {
+  var subs = (permit.subtasks || []).slice().sort(function(a,b){ return (a.endDate||'') < (b.endDate||'') ? -1 : 1; });
+  var start = permit.openedDate || '';
+  if (!start) return '<span style="font-size:11px;color:var(--text-muted)">Set Opened date</span>';
+  var end = '';
+  for (var i = 0; i < subs.length; i++) { if (subs[i].name === 'Permit Received') { end = subs[i].endDate; break; } }
+  if (!end && subs.length > 0) end = subs[subs.length-1].endDate;
+  if (!end) end = start;
+  var total = Math.max(1, _permitDaysBetween(start, end));
+  var today = new Date().toISOString().split('T')[0];
+  var segs = '';
+  var prev = start;
+  subs.forEach(function(st, i) {
+    if (!st.endDate || st.endDate <= prev) return;
+    var l = Math.max(0, Math.min(99, _permitDaysBetween(start, prev) / total * 100));
+    var w = Math.max(0.5, Math.min(100 - l, _permitDaysBetween(prev, st.endDate) / total * 100));
+    segs += '<div class="permit-bar-seg" style="left:' + l.toFixed(1) + '%;width:' + w.toFixed(1) + '%;background:' + _permitSegColors[i % _permitSegColors.length] + ';opacity:0.8"></div>';
+    prev = st.endDate;
+  });
+  var todayLine = (today >= start && today <= end)
+    ? '<div class="permit-bar-today" style="left:' + (_permitDaysBetween(start,today)/total*100).toFixed(1) + '%"></div>' : '';
+  return '<div class="permit-bar-dates"><span>' + formatDate(start) + '</span><span>' + formatDate(end) + '</span></div>'
+    + '<div class="permit-bar-track">' + segs + todayLine + '</div>';
+}
+
+function togglePermitExpand(id) {
+  if (_expandedPermits.has(id)) _expandedPermits.delete(id); else _expandedPermits.add(id);
+  renderPlannerPermits((data.permits || []).filter(function(p){ return String(p.projId) === _plannerProjId; }));
+}
+
+function renderPlannerPermits(permits) {
+  var container = document.getElementById('planner-permits-body');
+  if (!container) return;
+  if (!permits || permits.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:14px 16px">No permits yet &mdash; click &ldquo;Add Permit&rdquo; to start tracking agency reviews and permits.</div>';
+    return;
+  }
+  var html = '';
+  permits.forEach(function(p) {
+    var exp = _expandedPermits.has(p.id);
+    var sc  = _permitStatusClass(p.status || 'In Progress');
+    var subs = (p.subtasks || []).slice().sort(function(a,b){ return (a.endDate||'') < (b.endDate||'') ? -1 : 1; });
+    var dur = _permitDuration(p);
+    html += '<div class="permit-row">';
+    html += '<div class="permit-summary" onclick="togglePermitExpand(\'' + p.id + '\')">';
+    html += '<span class="permit-toggle">' + (exp ? '&#x25BC;' : '&#x25B6;') + '</span>';
+    html += '<span class="permit-name-col" title="' + escHtml(p.name||'') + '">' + escHtml(p.name || 'Unnamed Permit') + '</span>';
+    html += '<span class="permit-agency-col" title="' + escHtml(p.agency||'') + '">' + escHtml(p.agency || '') + '</span>';
+    html += '<span class="permit-bar-col">' + _renderPermitBar(p) + '</span>';
+    html += '<span class="permit-duration-col">' + (dur || '') + '</span>';
+    html += '<select class="permit-status-select ' + sc + '" onclick="event.stopPropagation()" onchange="updatePermitField(\'' + p.id + '\',\'status\',this.value);this.className=\'permit-status-select \'+_permitStatusClass(this.value)">'
+      + ['Not Needed','On Hold','In Progress','Permit Received'].map(function(s){
+          return '<option value="' + s + '"' + (p.status === s ? ' selected' : '') + '>' + s + '</option>';
+        }).join('') + '</select>';
+    html += '<button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:2px 6px;flex-shrink:0" onclick="event.stopPropagation();deletePermit(\'' + p.id + '\')" title="Delete permit">&#x1F5D1;</button>';
+    html += '</div>';
+    if (exp) {
+      html += '<div class="permit-detail">';
+      html += '<div class="permit-detail-grid">';
+      html += '<div><div class="form-label" style="margin-bottom:4px">Permit Name</div>'
+        + '<input class="form-input" style="width:180px;font-size:13px;padding:6px 8px" value="' + escHtml(p.name||'') + '"'
+        + ' onchange="updatePermitField(\'' + p.id + '\',\'name\',this.value)"></div>';
+      html += '<div><div class="form-label" style="margin-bottom:4px">Agency</div>'
+        + '<input class="form-input" style="width:160px;font-size:13px;padding:6px 8px" value="' + escHtml(p.agency||'') + '"'
+        + ' onchange="updatePermitField(\'' + p.id + '\',\'agency\',this.value)"></div>';
+      html += '<div><div class="form-label" style="margin-bottom:4px">Opened Date</div>'
+        + '<input class="form-input" type="date" style="width:145px;font-size:13px;padding:6px 8px" value="' + (p.openedDate||'') + '"'
+        + ' onchange="updatePermitField(\'' + p.id + '\',\'openedDate\',this.value)"></div>';
+      html += '</div>';
+      html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Steps &amp; Milestones</div>';
+      var oStart = p.openedDate || (subs[0] && subs[0].endDate) || '';
+      var oEnd = '';
+      for (var ei = 0; ei < subs.length; ei++) { if (subs[ei].name === 'Permit Received') { oEnd = subs[ei].endDate; break; } }
+      if (!oEnd && subs.length > 0) oEnd = subs[subs.length-1].endDate;
+      var totD = (oStart && oEnd) ? Math.max(1, _permitDaysBetween(oStart, oEnd)) : 1;
+      var prevD = oStart;
+      if (subs.length === 0) {
+        html += '<div style="color:var(--text-muted);font-size:12px;padding:4px 0 8px">No steps yet &mdash; add one below.</div>';
+      } else {
+        subs.forEach(function(st, si) {
+          var l = 0, w = 0;
+          if (oStart && st.endDate && prevD) {
+            l = Math.max(0, Math.min(99, _permitDaysBetween(oStart, prevD) / totD * 100));
+            w = Math.max(0.5, Math.min(100-l, _permitDaysBetween(prevD, st.endDate) / totD * 100));
+          }
+          var col = _permitSegColors[si % _permitSegColors.length];
+          var isRec = st.name === 'Permit Received';
+          html += '<div class="permit-subtask-row"' + (isRec ? ' style="background:rgba(40,167,69,0.06)"' : '') + '>';
+          html += '<input class="form-input" style="width:195px;font-size:12px;padding:4px 6px;font-weight:' + (isRec?'600':'400') + ';color:' + (isRec?'#1e7e34':'inherit') + '" value="' + escHtml(st.name) + '" onchange="updatePermitSubtask(\'' + p.id + '\',\'' + st.id + '\',\'name\',this.value)">';
+          html += '<input class="form-input" type="date" style="width:130px;font-size:12px;padding:4px 6px" value="' + (st.endDate||'') + '" onchange="updatePermitSubtask(\'' + p.id + '\',\'' + st.id + '\',\'endDate\',this.value)">';
+          html += '<div class="permit-subtask-bar-wrap"><div class="permit-subtask-track">'
+            + (w > 0 ? '<div class="permit-subtask-fill" style="left:' + l.toFixed(1) + '%;width:' + w.toFixed(1) + '%;background:' + col + '"></div>' : '')
+            + '</div></div>';
+          html += '<button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;padding:1px 5px" onclick="deletePermitSubtask(\'' + p.id + '\',\'' + st.id + '\')">&#x2715;</button>';
+          html += '</div>';
+          if (st.endDate) prevD = st.endDate;
+        });
+      }
+      html += '<div class="permit-add-subtask">'
+        + '<input class="form-input" id="new-st-name-' + p.id + '" placeholder="Step name (e.g. Submit to Agency)" style="width:220px;font-size:12px;padding:5px 8px">'
+        + '<input class="form-input" type="date" id="new-st-date-' + p.id + '" style="width:130px;font-size:12px;padding:5px 8px">'
+        + '<button class="btn btn-secondary btn-sm" onclick="addPermitSubtask(\'' + p.id + '\')">&#xFF0B; Add Step</button>'
+        + '</div>';
+      html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:14px 0 6px">Current Notes</div>';
+      html += '<textarea class="form-textarea" rows="3" style="font-size:13px;resize:vertical" maxlength="2000"'
+        + ' placeholder="Reviewer contacts, outstanding items, status updates..."'
+        + ' onchange="updatePermitField(\'' + p.id + '\',\'note\',this.value)">' + escHtml(p.note||'') + '</textarea>';
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  container.innerHTML = html;
+}
+
+function addPermit() {
+  if (!_plannerProjId) return;
+  if (!data.permits) data.permits = [];
+  var np = { id: permitKey(), projId: _plannerProjId, name: 'New Permit', agency: '',
+             openedDate: '', status: 'In Progress', note: '', subtasks: [] };
+  data.permits.push(np);
+  _expandedPermits.add(np.id);
+  saveData();
+  renderPlannerPermits(data.permits.filter(function(p){ return String(p.projId) === _plannerProjId; }));
+  toast('Permit added');
+}
+
+function updatePermitField(id, field, value) {
+  if (!data.permits) return;
+  var idx = data.permits.findIndex(function(p){ return p.id === id; });
+  if (idx < 0) return;
+  data.permits[idx][field] = value;
+  saveData();
+  renderPlannerPermits(data.permits.filter(function(p){ return String(p.projId) === _plannerProjId; }));
+}
+
+function deletePermit(id) {
+  var p = (data.permits || []).find(function(x){ return x.id === id; });
+  if (!p) return;
+  showConfirm('Delete permit "' + escHtml(p.name) + '"?',
+    'This will permanently remove this permit and all its steps.',
+    function() {
+      data.permits = data.permits.filter(function(x){ return x.id !== id; });
+      _expandedPermits.delete(id);
+      saveData();
+      renderPlannerPermits(data.permits.filter(function(p){ return String(p.projId) === _plannerProjId; }));
+      toast('Permit deleted');
+    });
+}
+
+function addPermitSubtask(permitId) {
+  var nEl = document.getElementById('new-st-name-' + permitId);
+  var dEl = document.getElementById('new-st-date-' + permitId);
+  if (!nEl) return;
+  var name = nEl.value.trim();
+  if (!name) { toast('&#x26A0; Enter a step name'); return; }
+  var idx = (data.permits || []).findIndex(function(p){ return p.id === permitId; });
+  if (idx < 0) return;
+  if (!data.permits[idx].subtasks) data.permits[idx].subtasks = [];
+  data.permits[idx].subtasks.push({ id: subtaskKey(), name: name, endDate: dEl ? dEl.value : '' });
+  data.permits[idx].subtasks.sort(function(a,b){ return (a.endDate||'9') < (b.endDate||'9') ? -1 : 1; });
+  saveData();
+  renderPlannerPermits(data.permits.filter(function(p){ return String(p.projId) === _plannerProjId; }));
+}
+
+function updatePermitSubtask(permitId, subtaskId, field, value) {
+  var pi = (data.permits || []).findIndex(function(p){ return p.id === permitId; });
+  if (pi < 0) return;
+  var si = (data.permits[pi].subtasks || []).findIndex(function(s){ return s.id === subtaskId; });
+  if (si < 0) return;
+  data.permits[pi].subtasks[si][field] = value;
+  if (field === 'endDate') data.permits[pi].subtasks.sort(function(a,b){ return (a.endDate||'9') < (b.endDate||'9') ? -1 : 1; });
+  saveData();
+  renderPlannerPermits(data.permits.filter(function(p){ return String(p.projId) === _plannerProjId; }));
+}
+
+function deletePermitSubtask(permitId, subtaskId) {
+  var pi = (data.permits || []).findIndex(function(p){ return p.id === permitId; });
+  if (pi < 0) return;
+  data.permits[pi].subtasks = (data.permits[pi].subtasks || []).filter(function(s){ return s.id !== subtaskId; });
+  saveData();
+  renderPlannerPermits(data.permits.filter(function(p){ return String(p.projId) === _plannerProjId; }));
+}
+
 // ============================================================
 // PROJECT PLANNER
 // ============================================================
@@ -6875,6 +7153,7 @@ function renderPlannerSearch(q) {
 function selectPlannerProject(projId) {
   _plannerProjId = String(projId);
   _plannerPeopleFilter = new Set(); // reset filter on project change
+  _expandedPermits = new Set();     // collapse all permits on project change
   var proj = (data.projects || []).find(function(p){ return String(p.projId) === _plannerProjId; });
   var inp = document.getElementById('planner-search-inp');
   if (inp && proj) inp.value = '#' + proj.projId + '  ' + (proj.projName || '');
@@ -6914,6 +7193,7 @@ function renderPlannerContent() {
   if (titleEl) titleEl.innerHTML = '#' + escHtml(String(projIdDisp)) + ' &mdash; ' + escHtml(projName);
   renderPlannerPhases(phases);
   renderPlannerMilestones(milestones);
+  renderPlannerPermits((data.permits || []).filter(function(p){ return String(p.projId) === _plannerProjId; }));
   renderPlannerPeopleChips();
   renderPlannerGrid(phases);
 }
