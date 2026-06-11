@@ -1995,6 +1995,20 @@
 
         <!-- Hours Grid -->
         <div class="card">
+          <div class="week-nav-bar">
+            <div style="display:flex;align-items:center;gap:6px">
+              <button class="week-nav-btn" onclick="weekNavStep('planner',-4)" title="Back 4 weeks">&#x25C0;&#x25C0;</button>
+              <button class="week-nav-btn" onclick="weekNavStep('planner',-1)" title="Back 1 week">&#x25C0;</button>
+              <button class="week-nav-btn week-nav-today" id="planner-nav-today" onclick="weekNavToday('planner')">Today</button>
+              <button class="week-nav-btn" onclick="weekNavStep('planner',1)" title="Forward 1 week">&#x25B6;</button>
+              <button class="week-nav-btn" onclick="weekNavStep('planner',4)" title="Forward 4 weeks">&#x25B6;&#x25B6;</button>
+            </div>
+            <span class="week-nav-label" id="planner-nav-label"></span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <label style="font-size:12px;color:var(--text-muted)">Jump to:</label>
+              <input type="month" class="filter-select" id="planner-jump-month" style="width:140px" onchange="weekNavJump('planner')">
+            </div>
+          </div>
           <div class="card-header" style="justify-content:space-between;flex-wrap:wrap;gap:12px;align-items:flex-start">
             <div>
               <div class="card-title">Projected Hours by Person</div>
@@ -3932,9 +3946,11 @@ let data = {}; // populated asynchronously by init() &rarr; loadData()
 let calWeekOffset = 0;   // calendar view
 let utilWeekOffset = 0;  // utilization view
 let pmatrixWeekOffset = 0; // project matrix view
+let plannerWeekOffset = 0; // project planner hours grid
 let dcalMonthOffset = 0;   // deadline calendar &mdash; months from current
 const CAL_COLS = 16;     // columns shown in calendar
 const UTIL_COLS = 12;    // columns shown in utilization
+const PLANNER_COLS = 16; // columns shown in project planner hours grid
 
 // Projects sort state
 let projSortField = 'projName';
@@ -4835,6 +4851,10 @@ function weekNavStep(view, delta) {
   } else if (view === 'pmatrix') {
     pmatrixWeekOffset = Math.max(-TIMELINE_PAST_WEEKS, Math.min(TIMELINE_FUTURE_WEEKS - 1, pmatrixWeekOffset + delta));
     renderProjectMatrix();
+  } else if (view === 'planner') {
+    plannerWeekOffset = Math.max(-TIMELINE_PAST_WEEKS, Math.min(TIMELINE_FUTURE_WEEKS - PLANNER_COLS, plannerWeekOffset + delta));
+    var _pp = data.projects.filter(function(p){ return String(p.projId) === _plannerProjId; });
+    renderPlannerGrid(_pp);
   } else {
     utilWeekOffset = Math.max(-TIMELINE_PAST_WEEKS, Math.min(TIMELINE_FUTURE_WEEKS - UTIL_COLS, utilWeekOffset + delta));
     renderUtilization();
@@ -4844,6 +4864,11 @@ function weekNavStep(view, delta) {
 function weekNavToday(view) {
   if (view === 'cal') { calWeekOffset = 0; renderCalendar(); }
   else if (view === 'pmatrix') { pmatrixWeekOffset = 0; renderProjectMatrix(); }
+  else if (view === 'planner') {
+    plannerWeekOffset = 0;
+    var _pp = data.projects.filter(function(p){ return String(p.projId) === _plannerProjId; });
+    renderPlannerGrid(_pp);
+  }
   else { utilWeekOffset = 0; renderUtilization(); }
 }
 
@@ -4860,6 +4885,10 @@ function weekNavJump(view) {
   } else if (view === 'pmatrix') {
     pmatrixWeekOffset = Math.max(-TIMELINE_PAST_WEEKS, Math.min(TIMELINE_FUTURE_WEEKS - 1, diffWeeks));
     renderProjectMatrix();
+  } else if (view === 'planner') {
+    plannerWeekOffset = Math.max(-TIMELINE_PAST_WEEKS, Math.min(TIMELINE_FUTURE_WEEKS - PLANNER_COLS, diffWeeks));
+    var _pp = data.projects.filter(function(p){ return String(p.projId) === _plannerProjId; });
+    renderPlannerGrid(_pp);
   } else {
     utilWeekOffset = Math.max(-TIMELINE_PAST_WEEKS, Math.min(TIMELINE_FUTURE_WEEKS - UTIL_COLS, diffWeeks));
     renderUtilization();
@@ -7203,6 +7232,29 @@ function renderPlannerContent() {
   renderPlannerGrid(phases);
 }
 
+function openPmCombo(phaseKey, inputEl) {
+  var q = (inputEl.value || '').toLowerCase().trim();
+  var list = document.getElementById('pm-list-' + phaseKey);
+  if (!list) return;
+  var people = (data.people || []).filter(function(p){ return p.active === 'Yes'; });
+  var filtered = q ? people.filter(function(p){ return (p.name||'').toLowerCase().indexOf(q) >= 0; }) : people;
+  if (filtered.length === 0) { list.classList.remove('open'); return; }
+  list.innerHTML = filtered.slice(0, 12).map(function(p) {
+    return '<div class="planner-search-item" onmousedown="selectPmPerson(\'' + phaseKey + '\',\'' + escHtml(p.name).replace(/'/g,'&#39;') + '\')">'
+      + escHtml(p.name) + (p.role ? '<span style="color:var(--text-muted);font-size:11px;margin-left:6px">' + escHtml(p.role) + '</span>' : '')
+      + '</div>';
+  }).join('');
+  list.classList.add('open');
+}
+
+function selectPmPerson(phaseKey, name) {
+  var inp = document.getElementById('pm-inp-' + phaseKey);
+  if (inp) inp.value = name;
+  var list = document.getElementById('pm-list-' + phaseKey);
+  if (list) list.classList.remove('open');
+  updatePlannerPhaseField(phaseKey, 'pm', name);
+}
+
 function renderPlannerPhases(phases) {
   var container = document.getElementById('planner-phases-body');
   if (!container) return;
@@ -7223,8 +7275,15 @@ function renderPlannerPhases(phases) {
         + ' onchange="updatePlannerPhaseField(' + "'" + ph._phaseKey + "'" + ',' + "'" + 'start' + "'" + ',this.value)" style="width:140px"></td>'
         + '<td><input class="form-input" type="date" value="' + (ph.end||'') + '"'
         + ' onchange="updatePlannerPhaseField(' + "'" + ph._phaseKey + "'" + ',' + "'" + 'end' + "'" + ',this.value)" style="width:140px"></td>'
-        + '<td><input class="form-input" value="' + escHtml(ph.pm||'') + '" style="width:80px"'
-        + ' onchange="updatePlannerPhaseField(' + "'" + ph._phaseKey + "'" + ',' + "'" + 'pm' + "'" + ',this.value)"></td>'
+        + '<td><div class="planner-search-wrap" style="width:160px">'
+        + '<input class="form-input planner-search-inp" id="pm-inp-' + ph._phaseKey + '" value="' + escHtml(ph.pm||'') + '"'
+        + ' autocomplete="off" style="width:160px"'
+        + ' oninput="openPmCombo(\'' + ph._phaseKey + '\',this)"'
+        + ' onfocus="openPmCombo(\'' + ph._phaseKey + '\',this)"'
+        + ' onblur="setTimeout(function(){var l=document.getElementById(\'pm-list-' + ph._phaseKey + '\');if(l)l.classList.remove(\'open\');},160)"'
+        + ' onchange="updatePlannerPhaseField(\'' + ph._phaseKey + '\',\'pm\',this.value)">'
+        + '<div class="planner-search-list" id="pm-list-' + ph._phaseKey + '"></div>'
+        + '</div></td>'
         + '<td><select class="form-select" style="width:110px" onchange="updatePlannerPhaseField(' + "'" + ph._phaseKey + "'" + ',' + "'" + 'status' + "'" + ',this.value)">' + statusOpts + '</select></td>'
         + '<td><button class="btn btn-danger btn-sm" onclick="deletePlannerPhase(' + "'" + ph._phaseKey + "'" + ')">&#x1F5D1;</button></td>'
         + '</tr>';
@@ -7422,28 +7481,10 @@ function renderPlannerGrid(phases) {
     return;
   }
 
-  // Determine week range from phase start/end dates
-  var dates = [];
-  phases.forEach(function(ph){ if (ph.start) dates.push(ph.start); if (ph.end) dates.push(ph.end); });
-
-  var startWeek, endWeek;
-  if (dates.length === 0) {
-    startWeek = getCurrentWeek();
-    endWeek   = addWeeks(startWeek, 11);
-  } else {
-    var minDate = dates.reduce(function(a,b){ return a < b ? a : b; });
-    var maxDate = dates.reduce(function(a,b){ return a > b ? a : b; });
-    startWeek = getWeekStart(minDate);
-    endWeek   = getWeekStart(maxDate);
-  }
-
-  // Build weeks array
-  var weeks = [];
-  var cur = startWeek;
-  var safety = 0;
-  while (cur <= endWeek && safety < 104) { weeks.push(cur); cur = addWeeks(cur, 1); safety++; }
-  if (weeks.length === 0) weeks.push(getCurrentWeek());
+  // Build weeks array from offset
+  var weeks = getWeeks(PLANNER_COLS, plannerWeekOffset);
   var curWeek = getCurrentWeek();
+  updateWeekNav('planner', plannerWeekOffset, PLANNER_COLS);
 
   // Show: (a) people with hours on any phase of this project, (b) people added via filter
   var activePeople = (data.people || []).filter(function(p){ return p.active === 'Yes'; });
