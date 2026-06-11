@@ -7553,7 +7553,7 @@ async function signIn() {
     init();
   } catch(e) {
     console.error('Login failed:', e);
-    if (btn) btn.textContent = '&#x1F511; Sign in with Microsoft';
+    if (btn) btn.innerHTML = '&#x1F511; Sign in with Microsoft';
     if (errEl) { errEl.textContent = 'Sign-in failed: ' + (e.message || 'Unknown error. Please try again.'); errEl.style.display = 'block'; }
   }
 }
@@ -7565,6 +7565,7 @@ function _showLoginScreen() {
 }
 
 async function init() {
+  if (window.opener && window.opener !== window) return;
   const ls = document.getElementById('loading-screen');
   if (ls) ls.style.display = 'flex';
 
