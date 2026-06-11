@@ -776,6 +776,29 @@
   .permit-subtask-track { position: relative; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
   .permit-subtask-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 3px; }
   .permit-add-subtask { display: flex; gap: 8px; align-items: center; padding: 10px 0 4px; }
+
+  /* ---- VIEWER (READ-ONLY) MODE ----
+     A single global gate. Locks every data-entry control and hides every
+     action button so future edit features are covered automatically.
+     Navigation/filter/search controls (.filter-select, lone .planner-search-inp,
+     .week-nav-btn, .vw-ok) stay live so viewers can still browse. */
+  body.viewer-mode .cal-input,
+  body.viewer-mode .form-input,
+  body.viewer-mode .form-select,
+  body.viewer-mode .permit-status-select {
+    pointer-events: none !important;
+    background: var(--bg) !important;
+    color: var(--text-muted) !important;
+    opacity: 0.85;
+    cursor: default !important;
+    box-shadow: none !important;
+  }
+  body.viewer-mode .content button:not(.week-nav-btn):not(.vw-ok) { display: none !important; }
+  body.viewer-mode #btn-add-top { display: none !important; }
+  #viewer-badge { display: none; align-items: center; gap: 5px; background: rgba(0,112,108,0.1);
+    color: var(--teal); font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 12px;
+    border: 1px solid rgba(0,112,108,0.25); white-space: nowrap; }
+
   #view-projplanner { max-width: 100%; overflow-x: hidden; }
   #view-projplanner .card { max-width: 100%; }
   #planner-phases-body { overflow-x: auto; }
@@ -1491,6 +1514,7 @@
   <div class="topbar">
     <div id="topbar-title" class="page-title">Dashboard</div>
     <div class="topbar-actions">
+      <span id="viewer-badge" title="You have read-only access to this data">&#x1F441; View only</span>
       <div id="sync-indicator" title="SharePoint sync status">
         <span id="sync-dot" class="sync-dot sync-idle"></span>
         <span id="sync-label" style="font-size:11px;color:var(--text-muted)"></span>
@@ -1500,7 +1524,7 @@
         <button onclick="_refreshData()">Refresh to see updates</button>
         <button onclick="document.getElementById('stale-banner').style.display='none'" style="background:transparent;color:#fff;font-weight:400;margin-left:8px;">dismiss</button>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="openAddModal()">&#xFF0B; Add</button>
+      <button id="btn-add-top" class="btn btn-primary btn-sm" onclick="openAddModal()">&#xFF0B; Add</button>
     </div>
   </div>
 
@@ -1923,7 +1947,7 @@
             onblur="setTimeout(function(){document.getElementById('planner-search-list').classList.remove('open')},150)">
           <div id="planner-search-list" class="planner-search-list"></div>
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="clearPlannerProject()" style="align-self:flex-start;margin-top:4px">&#x2715; Clear</button>
+        <button class="btn btn-secondary btn-sm vw-ok" onclick="clearPlannerProject()" style="align-self:flex-start;margin-top:4px">&#x2715; Clear</button>
       </div>
 
       <!-- Empty state -->
@@ -2839,7 +2863,36 @@ async function loadData() {
   }
 }
 
+// ---- Viewer (read-only) mode ----------------------------------------------
+// Detection is driven by the signed-in user's own SharePoint permission, so it
+// needs zero upkeep: anyone with Read-only access to the site becomes a viewer.
+async function _detectViewerMode() {
+  try {
+    const tok = await _getToken();
+    const r = await fetch(SP_SITE + '/_api/web/effectiveBasePermissions',
+      { headers: { 'Accept': 'application/json;odata=nometadata', 'Authorization': 'Bearer ' + tok } });
+    if (!r.ok) { _isViewer = false; return; }
+    const j  = await r.json();
+    const bp = j.value || j; // { High, Low }
+    // EditListItems = PermissionKind 3 -> bit 2 (value 4) of the Low dword.
+    // Bitwise & runs ToInt32 first, so it stays correct even for Full Control.
+    const canEdit = (Number(bp.Low) & 0x4) !== 0;
+    _isViewer = !canEdit;
+  } catch(e) {
+    console.warn('Viewer-mode detection failed; defaulting to editor:', e);
+    _isViewer = false;
+  }
+}
+
+function _applyViewerMode() {
+  if (!_isViewer) return;
+  document.body.classList.add('viewer-mode');
+  const badge = document.getElementById('viewer-badge');
+  if (badge) badge.style.display = 'inline-flex';
+}
+
 function saveData() {
+  if (_isViewer) return; // read-only users never write - single global backstop
   // Debounce: coalesce rapid edits (e.g. multiple cell changes) into one SP write
   setSyncIndicator('pending');
   clearTimeout(_syncTimer);
@@ -3947,6 +4000,7 @@ let calWeekOffset = 0;   // calendar view
 let utilWeekOffset = 0;  // utilization view
 let pmatrixWeekOffset = 0; // project matrix view
 let plannerWeekOffset = 0; // project planner hours grid
+let _isViewer = false;     // true = read-only user (no SharePoint edit permission)
 let dcalMonthOffset = 0;   // deadline calendar &mdash; months from current
 const CAL_COLS = 16;     // columns shown in calendar
 const UTIL_COLS = 12;    // columns shown in utilization
@@ -7621,6 +7675,8 @@ async function init() {
 
   try {
     data = await loadData();
+    await _detectViewerMode();
+    _applyViewerMode();
     if (ls) ls.style.display = 'none';
     populateTeamFilters();
     renderDashboard();
