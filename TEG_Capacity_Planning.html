@@ -7709,11 +7709,19 @@ async function init() {
 }
 
 (async function startup() {
-  try { await _msalApp.handleRedirectPromise(); } catch(e) { console.error('handleRedirectPromise error:', e); }
-  // Bail out if this page is running inside MSAL's auth popup
+  // If this page is running inside MSAL's auth popup, do NOTHING and let the
+  // main window's loginPopup() read the response. The auth code returns in the
+  // URL hash (#code=...), so we must detect the popup *before* calling
+  // handleRedirectPromise() - otherwise it consumes/clears the hash here and the
+  // main window waits forever (monitor_window_timeout = the spinning popup).
+  const _hash = window.location.hash || '';
   const _urlP = new URLSearchParams(window.location.search);
-  if ((window.opener && window.opener !== window) ||
-      _urlP.has('code') || _urlP.has('error_description') || _urlP.has('error')) return;
+  const _inPopup = (window.opener && window.opener !== window) ||
+    _hash.indexOf('code=') >= 0 || _hash.indexOf('error=') >= 0 ||
+    _urlP.has('code') || _urlP.has('error') || _urlP.has('error_description');
+  if (_inPopup) return;
+
+  try { await _msalApp.handleRedirectPromise(); } catch(e) { console.error('handleRedirectPromise error:', e); }
   init();
 })();
 </script>
