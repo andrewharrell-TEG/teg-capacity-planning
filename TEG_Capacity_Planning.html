@@ -5,7 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TEG Capacity Planning</title>
 <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700&family=Literata:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.39.0/lib/msal-browser.min.js"></script>
+<!-- MSAL is self-hosted (same origin as this app) so corporate networks that
+     block third-party CDNs can still load it. Falls back to the CDN if missing. -->
+<script src="msal-browser.min.js"></script>
+<script>
+  if (typeof msal === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.39.0/lib/msal-browser.min.js"><\/script>');
+  }
+</script>
 <style>
   :root {
     --teal: #00706C;
@@ -2466,6 +2473,16 @@ const SP_SITE = 'https://eastgroupcom.sharepoint.com/sites/TEGCapacityPlanning';
 // ** Replace these two values after creating your Azure AD app registration **
 const MSAL_CLIENT_ID = 'a265ce2d-0512-410f-9323-d5bdeefee855';
 const MSAL_TENANT_ID = '4c531318-2c47-4f1c-919c-e63543e214ea';
+
+if (typeof msal === 'undefined') {
+  // Auth library failed to load (e.g. network blocked both self-host and CDN).
+  // Show a clear message instead of leaving the user on an endless spinner.
+  var _le = document.getElementById('loading-error');
+  if (_le) _le.innerHTML = 'Could not load the Microsoft sign-in library. ' +
+    'This is usually a network or firewall restriction. Please try a different ' +
+    'network (or contact IT) and reload the page.';
+  throw new Error('MSAL library failed to load');
+}
 
 const _msalApp = new msal.PublicClientApplication({
   auth: {
