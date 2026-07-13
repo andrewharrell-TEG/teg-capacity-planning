@@ -7122,7 +7122,7 @@ function setSyncIndicator(state) {
   const label = document.getElementById('sync-label');
   if (!dot) return;
   dot.className = 'sync-dot sync-' + state;
-  const labels = { idle:'', pending:'Waiting&hellip;', saving:'Saving&hellip;', saved:'Saved &#x2713;', error:'Sync error' };
+  const labels = { idle:'', pending:'Saving&hellip;', saving:'Saving&hellip;', saved:'Saved &#x2713;', error:'Sync error' };
   if (label) label.innerHTML = labels[state] !== undefined ? labels[state] : '';
 }
 
