@@ -5330,13 +5330,15 @@ function renderProjectMatrix() {
   if (statusFilter) phases = phases.filter(p => p.status === statusFilter);
   if (pmFilter)     phases = phases.filter(p => p.pm     === pmFilter);
 
-  // Only show phases with assignments in the visible week
+  // Phase keys that have assignments in the visible week
   const activePhaseKeys = new Set(
     Object.keys(data.assignments)
       .filter(k => k.split('|')[2] === week)
       .map(k => k.split('|')[1])
   );
-  phases = phases.filter(ph => activePhaseKeys.has(ph._phaseKey));
+  // Show a phase if it has hours this week OR its project is Active (so Active
+  // projects always appear even with no hours yet, ready for assignment).
+  phases = phases.filter(ph => activePhaseKeys.has(ph._phaseKey) || ph.status === 'Active');
 
   const todayStr = new Date().toISOString().split('T')[0];
   const today    = new Date(todayStr + 'T00:00:00');
