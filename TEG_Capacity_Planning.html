@@ -806,6 +806,24 @@
     color: var(--teal); font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 12px;
     border: 1px solid rgba(0,112,108,0.25); white-space: nowrap; }
 
+  /* ---- Multi-select role filter ---- */
+  .role-filter-wrap { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    background: var(--soft-white); border: 1px solid var(--border); border-radius: 8px; padding: 3px 6px; }
+  .role-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .role-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--teal); color: #fff;
+    font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px; white-space: nowrap; }
+  .role-chip-x { cursor: pointer; font-size: 13px; line-height: 1; opacity: 0.85; }
+  .role-chip-x:hover { opacity: 1; }
+  .role-add-select { border: none; background: transparent; min-width: 118px; padding: 3px 4px; }
+
+  /* ---- Per-project status note ---- */
+  .proj-note-input {
+    width: 100%; font-family: 'Figtree', sans-serif; font-size: 12px; color: var(--text);
+    background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+  }
+  .proj-note-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 2px rgba(0,112,108,0.12); }
+  .proj-note-input::placeholder { color: var(--text-muted); font-style: italic; }
+
   #view-projplanner { max-width: 100%; overflow-x: hidden; }
   #view-projplanner .card { max-width: 100%; }
   #planner-phases-body { overflow-x: auto; }
@@ -1634,9 +1652,12 @@
           <select class="filter-select" id="cal-filter-team" onchange="renderCalendar()">
             <option value="">All Teams</option>
           </select>
-          <select class="filter-select" id="cal-filter-role" onchange="renderCalendar()">
-            <option value="">All Roles</option>
-          </select>
+          <div class="role-filter-wrap">
+            <div id="cal-role-chips" class="role-chips"></div>
+            <select class="filter-select role-add-select" id="cal-role-add" onchange="addRoleFilter('cal',this.value)">
+              <option value="">&#xFF0B; Add role...</option>
+            </select>
+          </div>
           <select class="filter-select" id="cal-filter-person" onchange="renderCalendar()">
             <option value="">All People</option>
           </select>
@@ -1719,6 +1740,12 @@
             <option>Complete</option>
             <option>On Hold</option>
           </select>
+          <div class="role-filter-wrap">
+            <div id="pmatrix-role-chips" class="role-chips"></div>
+            <select class="filter-select role-add-select" id="pmatrix-role-add" onchange="addRoleFilter('pmatrix',this.value)">
+              <option value="">&#xFF0B; Add role...</option>
+            </select>
+          </div>
           <div style="display:flex;align-items:center;gap:4px">
             <label style="font-size:12px;color:var(--text-muted);white-space:nowrap">Sort:</label>
             <select class="filter-select" id="pmatrix-sort-field" onchange="renderProjectMatrix()" style="width:110px">
@@ -1966,7 +1993,12 @@
 
       <!-- Content (shown when project selected) -->
       <div id="planner-content" style="display:none">
-        <h2 id="planner-proj-title" style="font-family:'Literata',serif;color:var(--teal);font-size:20px;margin:0 0 20px"></h2>
+        <h2 id="planner-proj-title" style="font-family:'Literata',serif;color:var(--teal);font-size:20px;margin:0 0 10px"></h2>
+        <div style="margin:0 0 20px">
+          <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em">Status Note</div>
+          <input class="proj-note-input" id="planner-proj-note" maxlength="255" placeholder="Add a current status note for this project..."
+            onchange="setProjectNote(_plannerProjId, this.value)" style="max-width:600px">
+        </div>
 
         <!-- Phases -->
         <div class="card" style="margin-bottom:20px">
@@ -2645,7 +2677,8 @@ function _assembleProjects(items) {
     return { _phaseKey: i.phaseKey, projId: i.projId, projName: i.projName, client: i.client || '',
              team: i.team, pm: i.pm || '', phaseId: i.phaseId, phaseNum: i.phaseNum || '',
              phaseName: i.phaseName, start: i.startDate || '', end: i.endDate || '',
-             status: i.status, priority: i.priority, phaseStatus: i.phaseStatus, notes: i.notes || '' };
+             status: i.status, priority: i.priority, phaseStatus: i.phaseStatus, notes: i.notes || '',
+             projNote: i.projNote || '' };
   });
 }
 
@@ -2702,7 +2735,8 @@ const _toSP = {
                      projName: p.projName, client: p.client || '', team: p.team, pm: p.pm || '',
                      phaseId: p.phaseId, phaseNum: p.phaseNum || '', phaseName: p.phaseName,
                      startDate: p.start || '', endDate: p.end || '', status: p.status,
-                     priority: p.priority, phaseStatus: p.phaseStatus, notes: p.notes || '' }),
+                     priority: p.priority, phaseStatus: p.phaseStatus, notes: p.notes || '',
+                     projNote: p.projNote || '' }),
   budget:    b => ({ Title: b._phaseKey || '', phaseKey: b._phaseKey || '', projId: String(b.projId || ''),
                      phaseId: b.phaseId || '', roleId: b.roleId, hours: b.hours || 0 }),
   vacation:  v => ({ Title: v.id, vacId: v.id, personId: v.personId, vacDate: v.date, hours: v.hours }),
@@ -4018,6 +4052,8 @@ let utilWeekOffset = 0;  // utilization view
 let pmatrixWeekOffset = 0; // project matrix view
 let plannerWeekOffset = 0; // project planner hours grid
 let _isViewer = false;     // true = read-only user (no SharePoint edit permission)
+let calRoleFilter = new Set();     // multi-select role (job title) filter - Resource Calendar
+let pmatrixRoleFilter = new Set(); // multi-select role (job title) filter - Project Matrix
 let dcalMonthOffset = 0;   // deadline calendar &mdash; months from current
 const CAL_COLS = 16;     // columns shown in calendar
 const UTIL_COLS = 12;    // columns shown in utilization
@@ -4860,14 +4896,9 @@ function populateTeamFilters() {
     });
   }
 
-  // Calendar role filter
-  const calRoleEl = document.getElementById('cal-filter-role');
-  if (calRoleEl) {
-    const cur = calRoleEl.value;
-    const roles = [...new Set(data.people.filter(p => p.active === 'Yes').map(p => p.title).filter(Boolean))].sort();
-    calRoleEl.innerHTML = '<option value="">All Roles</option>';
-    roles.forEach(r => calRoleEl.innerHTML += `<option ${r===cur?'selected':''}>${r}</option>`);
-  }
+  // Multi-select role filters (Calendar + Project Matrix)
+  renderRoleFilter('cal');
+  renderRoleFilter('pmatrix');
 
   // Dashboard chart person filter &mdash; no "All People", always requires a selection
   const chartPerson = document.getElementById('dash-chart-person');
@@ -4989,11 +5020,60 @@ function updateWeekNav(view, offset, cols) {
   }
 }
 
+// ---- Multi-select role (job-title) filters (Resource Calendar + Project Matrix) ----
+function _allJobTitles() {
+  return [...new Set(data.people.filter(p => p.active === 'Yes').map(p => p.title).filter(Boolean))].sort();
+}
+function _roleSet(view) { return view === 'cal' ? calRoleFilter : pmatrixRoleFilter; }
+
+function renderRoleFilter(view) {
+  const set = _roleSet(view);
+  const chipsEl = document.getElementById(view + '-role-chips');
+  const selEl   = document.getElementById(view + '-role-add');
+  if (chipsEl) {
+    chipsEl.innerHTML = [...set].map(r =>
+      '<span class="role-chip">' + escHtml(r) +
+      '<span class="role-chip-x" onclick="removeRoleFilter(\'' + view + '\',\'' + escHtml(r).replace(/'/g,'&#39;') + '\')" title="Remove">&times;</span></span>'
+    ).join('');
+  }
+  if (selEl) {
+    const avail = _allJobTitles().filter(r => !set.has(r));
+    selEl.innerHTML = '<option value="">&#xFF0B; Add role...</option>' +
+      avail.map(r => '<option value="' + escHtml(r) + '">' + escHtml(r) + '</option>').join('');
+    selEl.value = '';
+  }
+}
+function addRoleFilter(view, role) {
+  if (!role) return;
+  _roleSet(view).add(role);
+  renderRoleFilter(view);
+  view === 'cal' ? renderCalendar() : renderProjectMatrix();
+}
+function removeRoleFilter(view, role) {
+  _roleSet(view).delete(role);
+  renderRoleFilter(view);
+  view === 'cal' ? renderCalendar() : renderProjectMatrix();
+}
+
+// ---- Per-project status note (stored on the project's phase rows, edited in one place) ----
+function getProjectNote(projId) {
+  const ph = (data.projects || []).find(p => String(p.projId) === String(projId) && p.projNote);
+  return ph ? ph.projNote : '';
+}
+function setProjectNote(projId, text) {
+  const t = (text || '').slice(0, 255);
+  let changed = false;
+  (data.projects || []).forEach(ph => {
+    if (String(ph.projId) === String(projId) && (ph.projNote || '') !== t) { ph.projNote = t; changed = true; }
+  });
+  if (changed) saveData();
+}
+
 function renderCalendar() {
   const teamFilter   = document.getElementById('cal-filter-team')?.value   || '';
   const personFilter = document.getElementById('cal-filter-person')?.value || '';
-  const roleFilter   = document.getElementById('cal-filter-role')?.value   || '';
   const projSearch   = (document.getElementById('cal-filter-proj')?.value  || '').toLowerCase().trim();
+  renderRoleFilter('cal');
   const weeks = getWeeks(CAL_COLS, calWeekOffset);
   const visWeeks = weeks;
 
@@ -5003,7 +5083,7 @@ function renderCalendar() {
   let people = data.people.filter(p => p.active === 'Yes');
   if (teamFilter)   people = people.filter(p => p.team  === teamFilter);
   if (personFilter) people = people.filter(p => p.id    === personFilter);
-  if (roleFilter)   people = people.filter(p => p.title === roleFilter);
+  if (calRoleFilter.size) people = people.filter(p => calRoleFilter.has(p.title));
 
   // Build a set of week Monday strings for deadline lookup
   const weekSet = new Set(visWeeks);
@@ -5238,9 +5318,12 @@ function renderProjectMatrix() {
   const week = getWeeks(1, pmatrixWeekOffset)[0];
   updateWeekNav('pmatrix', pmatrixWeekOffset, 1);
 
-  // People columns &mdash; active only, filtered by team
+  renderRoleFilter('pmatrix');
+
+  // People columns &mdash; active only, filtered by team + role
   let people = data.people.filter(p => p.active === 'Yes');
   if (teamFilter) people = people.filter(p => p.team === teamFilter);
+  if (pmatrixRoleFilter.size) people = people.filter(p => pmatrixRoleFilter.has(p.title));
 
   // Project-phase rows &mdash; status + PM filters; team filter does NOT filter projects
   let phases = data.projects.filter(p => p.projId !== 1 && p.projId !== 'ADMIN');
@@ -5371,6 +5454,11 @@ function renderProjectMatrix() {
     </td>`;
     html += `<td class="pmatrix-proj-cell" style="font-weight:700;font-size:12px;padding-left:14px">
       <span style="font-family:monospace;font-size:10px;color:var(--text-muted);background:var(--soft-white);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:6px">#${g.projId}</span>${g.projName}
+      <div style="margin-top:4px;font-weight:400">
+        <input class="proj-note-input" maxlength="255" placeholder="Status note..."
+          value="${escHtml(getProjectNote(g.projId))}"
+          onchange="setProjectNote('${g.projId}', this.value)">
+      </div>
     </td>`;
     html += `<td style="font-size:11px;color:var(--text-muted);background:rgba(0,112,108,0.03)">${g.pm}</td>`;
     people.forEach(() => html += '<td style="background:rgba(0,112,108,0.03)"></td>');
@@ -6096,6 +6184,11 @@ function renderProjects() {
               <button class="btn btn-secondary btn-sm" onclick="openProjectModal({projId:'${g.projId}',projName:'${g.projName.replace(/'/g,"\\'")}',pm:'${g.pm}',team:'${g.team}'})">&#xFF0B; Phase</button>
             </div>
           </div>
+          <div style="margin-top:8px">
+            <input class="proj-note-input" maxlength="255" placeholder="Status note..."
+              value="${escHtml(getProjectNote(g.projId))}"
+              onchange="setProjectNote('${g.projId}', this.value)">
+          </div>
         </td>
       </tr>`;
 
@@ -6719,7 +6812,7 @@ function openAssignModal() {
   const roleSel = document.getElementById('f-assign-role');
   roleSel.innerHTML = data.roles.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
 
-  document.getElementById('f-assign-week').value = data.settings.planStartDate;
+  document.getElementById('f-assign-week').value = getCurrentWeek();
   document.getElementById('f-assign-hours').value = '';
 
   // Close combobox when clicking outside
@@ -7296,6 +7389,8 @@ function renderPlannerContent() {
   var projIdDisp = phases.length > 0 ? phases[0].projId : _plannerProjId;
   var titleEl = document.getElementById('planner-proj-title');
   if (titleEl) titleEl.innerHTML = '#' + escHtml(String(projIdDisp)) + ' &mdash; ' + escHtml(projName);
+  var noteEl = document.getElementById('planner-proj-note');
+  if (noteEl) noteEl.value = getProjectNote(_plannerProjId);
   renderPlannerPhases(phases);
   renderPlannerMilestones(milestones);
   renderPlannerPermits((data.permits || []).filter(function(p){ return String(p.projId) === _plannerProjId; }));
