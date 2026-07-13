@@ -1555,6 +1555,17 @@
 
   <div class="content">
 
+    <!-- Crash / unsaved-changes recovery banner -->
+    <div id="recovery-banner" style="display:none;background:#fff4e0;border:1.5px solid #f1a01f;border-radius:8px;padding:12px 16px;margin-bottom:16px;align-items:center;gap:14px;flex-wrap:wrap">
+      <span style="font-size:20px">&#x1F4BE;</span>
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:600;color:#7a4800">Recover unsaved changes?</div>
+        <div id="recovery-info" style="font-size:12px;color:#8a5c00"></div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="_restoreBackup()">Restore</button>
+      <button class="btn btn-secondary btn-sm" onclick="_discardBackup()">Discard</button>
+    </div>
+
     <!-- DASHBOARD -->
     <div id="view-dashboard" class="view active">
       <div class="kpi-grid">
@@ -2579,9 +2590,30 @@ let _spBudgetIds = []; // parallel array to data.budgets[]
 // Snapshot of last successfully synced data (used for diffing in saveData)
 let _spSnapshot = null;
 
-// Debounce state for saveData()
+// Debounce / save-state for saveData()
 let _syncTimer   = null;
-let _syncPending = false;
+let _syncPending = false;   // there are edits not yet written to SharePoint
+let _syncing     = false;   // a _syncToSP run is currently in flight (re-entrancy lock)
+let _dirty       = false;   // local data differs from what's confirmed saved on the server
+let _syncRetries = 0;       // consecutive failed sync attempts (for backoff)
+
+// ---- Local crash/close safety net -------------------------------------------
+// A copy of unsaved data is mirrored to localStorage the instant an edit happens,
+// so nothing is lost if the tab closes, the browser crashes, or a sync fails
+// before it completes. The backup is removed only after a fully successful sync.
+const _BACKUP_KEY = 'teg_capacity_backup_v1';
+function _writeBackup() {
+  try {
+    localStorage.setItem(_BACKUP_KEY, JSON.stringify({
+      savedAt: new Date().toISOString(),
+      account: (_msalApp.getAllAccounts()[0] || {}).username || '',
+      data: data
+    }));
+  } catch (e) { /* quota/serialization issues are non-fatal */ }
+}
+function _clearBackup() {
+  try { localStorage.removeItem(_BACKUP_KEY); } catch (e) {}
+}
 
 // ============================================================
 // SP REST API HELPERS
@@ -2944,6 +2976,8 @@ function _applyViewerMode() {
 
 function saveData() {
   if (_isViewer) return; // read-only users never write - single global backstop
+  _dirty = true;
+  _writeBackup();        // mirror to localStorage immediately - survives close/crash
   // Debounce: coalesce rapid edits (e.g. multiple cell changes) into one SP write
   setSyncIndicator('pending');
   clearTimeout(_syncTimer);
@@ -2953,10 +2987,17 @@ function saveData() {
 
 // ---- Sync engine: diffs current data vs snapshot, writes only changes --------------------
 async function _syncToSP() {
+  if (_isViewer) return;
   if (!_syncPending) return;
+  if (_syncing) return;             // a run is already active; it will re-run for pending edits
+  _syncing = true;
   _syncPending = false;
   setSyncIndicator('saving');
-  const curr = data;
+
+  // Freeze the exact data we are about to write. Edits made DURING this async run
+  // mutate `data` but NOT this copy, so they stay dirty and get written by the next
+  // run instead of being silently marked as saved. (This was the main data-loss bug.)
+  const curr = JSON.parse(JSON.stringify(data));
   const prev = _spSnapshot || { people:[], roles:[], projects:[], budgets:[],
                                  assignments:{}, vacation:[], milestones:[], permits:[], settings:{} };
   try {
@@ -2971,7 +3012,8 @@ async function _syncToSP() {
       _syncArrayList ('Permits',   prev.permits    || [], curr.permits    || [], 'id',        _toSP.permit,    _spIds.permits),
     ]);
     await _syncBudgets(prev.budgets || [], curr.budgets || []);
-    _spSnapshot = JSON.parse(JSON.stringify(curr));
+    _spSnapshot  = curr;   // this exact frozen copy is now confirmed on the server
+    _syncRetries = 0;
     // Use server timestamp to avoid clock-skew false positives in the stale poller
     try {
       const _tsTok = await _getToken().catch(() => '');
@@ -2980,11 +3022,30 @@ async function _syncToSP() {
       if (_tsR.ok) { const _tsJ = await _tsR.json(); const _ts = (_tsJ.value||[])[0]?.Modified; _loadedAt = _ts || new Date().toISOString(); }
       else { _loadedAt = new Date().toISOString(); }
     } catch(e) { _loadedAt = new Date().toISOString(); }
-    setSyncIndicator('saved');
+    _syncing = false;
+    if (_syncPending) {
+      // More edits arrived while we were saving - flush them right away.
+      setSyncIndicator('saving');
+      _syncToSP();
+    } else {
+      _dirty = false;
+      _clearBackup();      // everything confirmed on the server; drop the local backup
+      setSyncIndicator('saved');
+    }
   } catch(e) {
     console.error('[SP Sync]', e);
+    _syncing = false;
+    _syncPending = true;   // keep the changes queued; they are still backed up locally
+    _syncRetries++;
     setSyncIndicator('error');
-    toast('&#x26A0; Sync error &mdash; ' + (e.message || 'unknown').slice(0, 80) + '. Try refreshing.');
+    if (_syncRetries <= 6) {
+      const delay = Math.min(2000 * _syncRetries, 15000);
+      toast('&#x26A0; Save failed &mdash; retrying in ' + Math.round(delay/1000) + 's. Your changes are safe.');
+      clearTimeout(_syncTimer);
+      _syncTimer = setTimeout(_syncToSP, delay);
+    } else {
+      toast('&#x26A0; Still can\'t save after several tries. Your changes are saved on this device &mdash; check your connection; do NOT close the tab.');
+    }
   }
 }
 
@@ -3062,6 +3123,62 @@ async function _syncBudgets(prev, curr) {
     }
   }
   _spBudgetIds = _spBudgetIds.slice(0, curr.length);
+}
+
+// ---- Unsaved-changes guard + crash recovery ---------------------------------
+// Warn before leaving if edits have not been confirmed on the server yet.
+window.addEventListener('beforeunload', function (e) {
+  if (_dirty || _syncPending || _syncing) {
+    e.preventDefault();
+    e.returnValue = '';   // triggers the browser's "Leave site? Changes may not be saved" prompt
+    return '';
+  }
+});
+
+// On load, if a backup from a previous session survived (meaning changes were not
+// confirmed saved before the tab closed/crashed/failed), offer to restore them.
+function _maybeOfferRecovery() {
+  let bk = null;
+  try { bk = JSON.parse(localStorage.getItem(_BACKUP_KEY) || 'null'); } catch (e) { bk = null; }
+  if (!bk || !bk.data) return;
+  // Ignore a backup that matches what we just loaded (nothing was actually lost).
+  try {
+    if (JSON.stringify(bk.data) === JSON.stringify(data)) { _clearBackup(); return; }
+  } catch (e) {}
+  const banner = document.getElementById('recovery-banner');
+  const info   = document.getElementById('recovery-info');
+  if (!banner) return;
+  const when = bk.savedAt ? new Date(bk.savedAt).toLocaleString() : 'a previous session';
+  if (info) info.textContent = 'Unsaved changes from ' + when + ' were found on this device.';
+  banner.style.display = 'flex';
+}
+function _restoreBackup() {
+  let bk = null;
+  try { bk = JSON.parse(localStorage.getItem(_BACKUP_KEY) || 'null'); } catch (e) { bk = null; }
+  if (bk && bk.data) {
+    data = bk.data;
+    const b = document.getElementById('recovery-banner'); if (b) b.style.display = 'none';
+    saveData();  // diff restored data against the server snapshot and write the differences
+    // Re-render the active view with the restored data
+    const activeId = document.querySelector('.view.active')?.id?.replace('view-', '') || 'dashboard';
+    _rerenderView(activeId);
+    toast('Restored your unsaved changes &mdash; saving to the server&hellip;');
+  }
+}
+function _discardBackup() {
+  _clearBackup();
+  const b = document.getElementById('recovery-banner'); if (b) b.style.display = 'none';
+}
+function _rerenderView(activeId) {
+  if (activeId === 'calendar')          renderCalendar();
+  else if (activeId === 'utilization')  renderUtilization();
+  else if (activeId === 'projmatrix')   renderProjectMatrix();
+  else if (activeId === 'deadlinecal')  { renderDeadlineCal(); renderDeadlineTable(); }
+  else if (activeId === 'vacation')     renderVacation();
+  else if (activeId === 'projects')     renderProjects();
+  else if (activeId === 'people')       renderPeople();
+  else if (activeId === 'projplanner')  renderProjectPlanner();
+  else                                  renderDashboard();
 }
 
 const defaultData = {
@@ -7065,6 +7182,10 @@ function _startStalePoller() {
 
 // Re-fetch data from SharePoint and re-render the active view, preserving all filters
 async function _refreshData() {
+  // Never clobber unsaved local edits with server data without asking.
+  if (_dirty || _syncPending || _syncing) {
+    if (!confirm('You have unsaved changes that are still being saved. Reloading now may discard them. Reload anyway?')) return;
+  }
   document.getElementById('stale-banner').style.display = 'none';
   setSyncIndicator('saving'); // borrow the indicator as a "loading" state
   try {
@@ -7796,6 +7917,7 @@ async function init() {
     renderDashboard();
     setSyncIndicator('saved');
     _startStalePoller();
+    _maybeOfferRecovery();  // recover unsaved changes from a prior tab close/crash
   } catch(e) {
     if (e.code === 'NOT_SIGNED_IN' || e.message === 'NOT_SIGNED_IN') { _showLoginScreen(); return; }
     console.error('init error:', e);
