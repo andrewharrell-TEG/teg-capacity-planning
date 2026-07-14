@@ -1555,6 +1555,15 @@
 
   <div class="content">
 
+    <!-- No write-access banner (shown when a save is rejected with 403) -->
+    <div id="noaccess-banner" style="display:none;background:#fdecea;border:1.5px solid #e74c3c;border-radius:8px;padding:12px 16px;margin-bottom:16px;align-items:center;gap:12px;flex-wrap:wrap">
+      <span style="font-size:20px">&#x1F512;</span>
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:600;color:#a5281b">Your changes can't be saved &mdash; read-only access</div>
+        <div style="font-size:12px;color:#a5281b">Your account has view-only access to the planning data, so edits won't save. Ask Andrew to grant you Edit access on the SharePoint site, then reload. Any changes you made are backed up on this device and can be recovered after access is granted.</div>
+      </div>
+    </div>
+
     <!-- Crash / unsaved-changes recovery banner -->
     <div id="recovery-banner" style="display:none;background:#fff4e0;border:1.5px solid #f1a01f;border-radius:8px;padding:12px 16px;margin-bottom:16px;align-items:center;gap:14px;flex-wrap:wrap">
       <span style="font-size:20px">&#x1F4BE;</span>
@@ -2640,7 +2649,9 @@ async function _spFetch(url, opts) {
   if (resp.status === 204) return null;
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error('SP API ' + (opts.method || 'GET') + ' ' + resp.status + ': ' + body.slice(0, 200));
+    const err = new Error('SP API ' + (opts.method || 'GET') + ' ' + resp.status + ': ' + body.slice(0, 200));
+    err.status = resp.status;   // let callers distinguish 403 (no access) from transient errors
+    throw err;
   }
   const ct = resp.headers.get('content-type') || '';
   return ct.includes('json') ? resp.json() : null;
@@ -2950,9 +2961,11 @@ async function loadData() {
 // Detection is driven by the signed-in user's own SharePoint permission, so it
 // needs zero upkeep: anyone with Read-only access to the site becomes a viewer.
 async function _detectViewerMode() {
+  // Check permission on the Assignments LIST (the most frequently written list),
+  // which is more accurate than the site-level check if the list has unique perms.
   try {
     const tok = await _getToken();
-    const r = await fetch(SP_SITE + '/_api/web/effectiveBasePermissions',
+    const r = await fetch(SP_SITE + "/_api/web/lists/getbytitle('Assignments')/effectiveBasePermissions",
       { headers: { 'Accept': 'application/json;odata=nometadata', 'Authorization': 'Bearer ' + tok } });
     if (!r.ok) { _isViewer = false; return; }
     const j  = await r.json();
@@ -2965,6 +2978,17 @@ async function _detectViewerMode() {
     console.warn('Viewer-mode detection failed; defaulting to editor:', e);
     _isViewer = false;
   }
+}
+
+// Called when a save is rejected for lack of permission (HTTP 403). Rather than
+// looping on "save failed", switch to a clear read-only state. The local backup
+// is kept, so if edit access is later granted the changes can be recovered.
+function _handleNoWriteAccess() {
+  _isViewer = true;
+  _applyViewerMode();
+  const banner = document.getElementById('noaccess-banner');
+  if (banner) banner.style.display = 'flex';
+  setSyncIndicator('error');
 }
 
 function _applyViewerMode() {
@@ -3033,8 +3057,22 @@ async function _syncToSP() {
       setSyncIndicator('saved');
     }
   } catch(e) {
-    console.error('[SP Sync]', e);
+    console.error('[SP Sync]', e.status || '', e.message || e);
     _syncing = false;
+    const status = e && e.status;
+
+    if (status === 403) {
+      // Access denied - the account can read but not write. Stop looping and show
+      // a clear read-only message instead of scaring the user with "save failed".
+      _syncPending = false;
+      _handleNoWriteAccess();
+      return;
+    }
+    if (status === 401) {
+      // Token likely expired mid-session - drop cached token/digest so the retry re-auths.
+      _cachedToken = null; _tokenExpiry = 0; _digestValue = null; _digestExpiry = 0;
+    }
+
     _syncPending = true;   // keep the changes queued; they are still backed up locally
     _syncRetries++;
     setSyncIndicator('error');
