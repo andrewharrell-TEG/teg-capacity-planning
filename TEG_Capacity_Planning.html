@@ -4389,11 +4389,17 @@ const VIEW_TITLES = {
 };
 
 function showView(name) {
+  const viewEl = document.getElementById('view-' + name);
+  if (!viewEl) return;
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('view-' + name).classList.add('active');
-  event.currentTarget.classList.add('active');
-  document.getElementById('topbar-title').textContent = VIEW_TITLES[name];
+  viewEl.classList.add('active');
+  // Highlight the matching nav item by name so this works whether called from a
+  // click or programmatically (e.g. restoring the last view after a refresh).
+  const navEl = document.querySelector('.nav-item[onclick*="showView(\'' + name + '\')"]');
+  if (navEl) navEl.classList.add('active');
+  document.getElementById('topbar-title').textContent = VIEW_TITLES[name] || '';
+  try { localStorage.setItem('teg_active_view', name); } catch (e) {}
 
   if (name === 'dashboard') renderDashboard();
   if (name === 'calendar') renderCalendar();
@@ -4404,6 +4410,13 @@ function showView(name) {
   if (name === 'projects') renderProjects();
   if (name === 'people') renderPeople();
   if (name === 'projplanner') renderProjectPlanner();
+}
+
+// Restore the last-viewed tab after a page reload (defaults to dashboard).
+function _restoreActiveView() {
+  let v = null;
+  try { v = localStorage.getItem('teg_active_view'); } catch (e) {}
+  if (v && v !== 'dashboard' && document.getElementById('view-' + v)) showView(v);
 }
 
 function openAddModal() {
@@ -5205,14 +5218,19 @@ function renderCalendar() {
   // Build a set of week Monday strings for deadline lookup
   const weekSet = new Set(visWeeks);
 
-  // Precompute: for each project, which weeks (in visWeeks) fall on or within 7 days of a deadline?
-  // We highlight the week whose Monday &le; deadline &le; Sunday
-  function isDeadlineWeek(proj, weekStr) {
-    if (!proj?.end) return false;
-    const monday  = new Date(weekStr + 'T00:00:00');
-    const sunday  = new Date(monday); sunday.setDate(sunday.getDate() + 6);
-    const dl      = new Date(proj.end + 'T00:00:00');
-    return dl >= monday && dl <= sunday;
+  // For a phase row, return the deadline that falls in the given week (Mon..Sun),
+  // or null. Considers BOTH the phase end date AND the project's milestones, so
+  // milestones highlight too (previously only phase-end dates were shown).
+  function deadlineForWeek(proj, weekStr) {
+    if (!proj) return null;
+    const monday = new Date(weekStr + 'T00:00:00');
+    const sunday = new Date(monday); sunday.setDate(sunday.getDate() + 6);
+    const inWk = (ds) => { if (!ds) return false; const d = new Date(ds + 'T00:00:00'); return d >= monday && d <= sunday; };
+    if (inWk(proj.end)) return { date: proj.end, label: proj.phaseName || proj.phaseId || 'Phase end' };
+    const pid = String(proj.projId);
+    const ms = (data.milestones || []).find(m => String(m.projId) === pid && inWk(m.date));
+    if (ms) return { date: ms.date, label: ms.label || 'Milestone' };
+    return null;
   }
 
   // Build all calendar rows
@@ -5297,10 +5315,10 @@ function renderCalendar() {
         html += `<td style="font-size:11px;color:var(--text-muted)">&mdash;</td>`;
         visWeeks.forEach(w => {
           const h = getAssignedHoursForPersonPhaseWeek(p.id, pp.phaseKey, w);
-          const onDeadline = proj && isDeadlineWeek(proj, w);
-          const dlClass = onDeadline ? ' cal-deadline-cell' : '';
-          const dlTitle = onDeadline
-            ? ` title="Deadline: ${(proj.projName||'').replace(/"/g,'&quot;')} &mdash; ${(proj.phaseName||proj.phaseId||'').replace(/"/g,'&quot;')} (${proj.end})"`
+          const dl = proj ? deadlineForWeek(proj, w) : null;
+          const dlClass = dl ? ' cal-deadline-cell' : '';
+          const dlTitle = dl
+            ? ` title="Deadline: ${(proj.projName||'').replace(/"/g,'&quot;')} &mdash; ${String(dl.label).replace(/"/g,'&quot;')} (${dl.date})"`
             : '';
           html += `<td style="text-align:center" class="${dlClass}"${dlTitle}>
             <input class="cal-input" type="number" min="0" max="80"
@@ -7918,6 +7936,7 @@ async function init() {
     setSyncIndicator('saved');
     _startStalePoller();
     _maybeOfferRecovery();  // recover unsaved changes from a prior tab close/crash
+    _restoreActiveView();   // stay on the same tab after a refresh
   } catch(e) {
     if (e.code === 'NOT_SIGNED_IN' || e.message === 'NOT_SIGNED_IN') { _showLoginScreen(); return; }
     console.error('init error:', e);
