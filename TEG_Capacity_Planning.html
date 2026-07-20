@@ -823,6 +823,11 @@
   }
   .proj-note-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 2px rgba(0,112,108,0.12); }
   .proj-note-input::placeholder { color: var(--text-muted); font-style: italic; }
+  .pmatrix-status-select {
+    margin-left: 8px; font-family: 'Figtree', sans-serif; font-size: 11px; font-weight: 600;
+    padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text);
+    cursor: pointer; vertical-align: middle;
+  }
 
   #view-projplanner { max-width: 100%; overflow-x: hidden; }
   #view-projplanner .card { max-width: 100%; }
@@ -1052,12 +1057,17 @@
     border-bottom: 2px solid var(--border);
     white-space: nowrap;
   }
+  /* Vertical scroll container so the header row can freeze while scrolling down */
+  .pmatrix-scroll { overflow: auto; max-height: calc(100vh - 240px); }
+  /* Freeze the header row at the top of the scroll container */
+  .pmatrix-table thead th { position: sticky; top: 0; z-index: 4; }
   .pmatrix-table th.pmatrix-proj-col {
     text-align: left;
     min-width: 220px;
     position: sticky;
     left: 0;
-    z-index: 3;
+    top: 0;
+    z-index: 6; /* top-left corner: above both the frozen row and frozen column */
   }
   .pmatrix-table td {
     padding: 7px 10px;
@@ -1681,6 +1691,10 @@
           <select class="filter-select" id="cal-filter-person" onchange="renderCalendar()">
             <option value="">All People</option>
           </select>
+          <select class="filter-select" id="cal-proj-sort" onchange="calProjectSort=this.value;renderCalendar()" title="Sort each person's projects">
+            <option value="name">Projects: A&ndash;Z</option>
+            <option value="hours">Projects: Hours (high&ndash;low)</option>
+          </select>
           <button class="btn btn-primary" onclick="openAssignModal()">&#xFF0B; Add Assignment</button>
         </div>
       </div>
@@ -1754,11 +1768,12 @@
             <option value="">All PMs</option>
           </select>
           <select class="filter-select" id="pmatrix-filter-status" onchange="renderProjectMatrix()">
-            <option value="">All Status</option>
-            <option>Active</option>
-            <option>Not Started</option>
-            <option>Complete</option>
-            <option>On Hold</option>
+            <option value="not-complete" selected>Active &amp; upcoming</option>
+            <option value="">All statuses</option>
+            <option value="Active">Active only</option>
+            <option value="Not Started">Not Started</option>
+            <option value="On Hold">On Hold</option>
+            <option value="Complete">Complete</option>
           </select>
           <div class="role-filter-wrap">
             <div id="pmatrix-role-chips" class="role-chips"></div>
@@ -1793,7 +1808,7 @@
         </div>
       </div>
       <div class="card">
-        <div class="table-wrap">
+        <div class="pmatrix-scroll">
           <table class="pmatrix-table" id="pmatrix-table-el"></table>
         </div>
       </div>
@@ -1876,6 +1891,7 @@
             <option value="label">Sort by Label</option>
           </select>
           <button class="week-nav-btn" id="dl-sort-dir-btn" onclick="toggleDlSortDir()" style="font-size:14px;padding:4px 8px">&uarr;</button>
+          <button class="week-nav-btn" id="dl-past-btn" onclick="dlShowPast=!dlShowPast;document.getElementById('dl-past-btn').classList.toggle('week-nav-today',dlShowPast);renderDeadlineTable()" title="Include deadlines that have already passed" style="font-size:12px;padding:4px 10px">Show past</button>
         </div>
         <div class="card" style="padding:0;overflow:hidden">
           <table id="dl-table" style="width:100%;border-collapse:collapse;font-size:13px"></table>
@@ -4209,6 +4225,8 @@ let plannerWeekOffset = 0; // project planner hours grid
 let _isViewer = false;     // true = read-only user (no SharePoint edit permission)
 let calRoleFilter = new Set();     // multi-select role (job title) filter - Resource Calendar
 let pmatrixRoleFilter = new Set(); // multi-select role (job title) filter - Project Matrix
+let calProjectSort = 'name';       // per-employee project sort in calendar: 'name' or 'hours'
+let dlShowPast = false;            // Deadline TABLE: include past deadlines (calendar always shows all)
 let dcalMonthOffset = 0;   // deadline calendar &mdash; months from current
 const CAL_COLS = 16;     // columns shown in calendar
 const UTIL_COLS = 12;    // columns shown in utilization
@@ -5237,6 +5255,19 @@ function setProjectNote(projId, text) {
   if (changed) saveData();
 }
 
+// Project status is stored per phase row (project-level); set it on all phases at once.
+function getProjectStatus(projId) {
+  const ph = (data.projects || []).find(p => String(p.projId) === String(projId));
+  return ph ? (ph.status || '') : '';
+}
+function setProjectStatus(projId, status) {
+  let changed = false;
+  (data.projects || []).forEach(ph => {
+    if (String(ph.projId) === String(projId) && (ph.status || '') !== status) { ph.status = status; changed = true; }
+  });
+  if (changed) { saveData(); renderProjectMatrix(); }
+}
+
 function renderCalendar() {
   const teamFilter   = document.getElementById('cal-filter-team')?.value   || '';
   const personFilter = document.getElementById('cal-filter-person')?.value || '';
@@ -5252,6 +5283,7 @@ function renderCalendar() {
   if (teamFilter)   people = people.filter(p => p.team  === teamFilter);
   if (personFilter) people = people.filter(p => p.id    === personFilter);
   if (calRoleFilter.size) people = people.filter(p => calRoleFilter.has(p.title));
+  people.sort((a, b) => (a.name || '').localeCompare(b.name || ''));  // employees A-Z
 
   // Build a set of week Monday strings for deadline lookup
   const weekSet = new Set(visWeeks);
@@ -5295,13 +5327,19 @@ function renderCalendar() {
     // If projSearch is active and no matching phases, skip this person entirely
     if (projSearch && filteredKeys.length === 0) return;
 
-    // Sort phases by soonest deadline first; phases with no end date go to the bottom
+    // Sort phases: alphabetical by project name (default), or by descending hours
+    // (this person's total assigned hours across the visible weeks for that phase).
+    const _phaseHours = pk => visWeeks.reduce((s, w) => s + getAssignedHoursForPersonPhaseWeek(p.id, pk, w), 0);
     filteredKeys.sort((a, b) => {
       const pa = data.projects.find(x => x._phaseKey === a);
       const pb = data.projects.find(x => x._phaseKey === b);
-      const da = pa?.end || '9999-12-31';
-      const db = pb?.end || '9999-12-31';
-      return da < db ? -1 : da > db ? 1 : 0;
+      if (calProjectSort === 'hours') {
+        const diff = _phaseHours(b) - _phaseHours(a);   // descending
+        if (diff !== 0) return diff;
+      }
+      const na = ((pa?.projName || '') + ' ' + (pa?.phaseName || '')).toLowerCase();
+      const nb = ((pb?.projName || '') + ' ' + (pb?.phaseName || '')).toLowerCase();
+      return na.localeCompare(nb);
     });
 
     const ppList = filteredKeys.map(pk => ({ phaseKey: pk }));
@@ -5498,20 +5536,14 @@ function renderProjectMatrix() {
   if (teamFilter) people = people.filter(p => p.team === teamFilter);
   if (pmatrixRoleFilter.size) people = people.filter(p => pmatrixRoleFilter.has(p.title));
 
-  // Project-phase rows &mdash; status + PM filters; team filter does NOT filter projects
+  // Project-phase rows &mdash; status + PM filters; team filter does NOT filter projects.
+  // Status filter values: 'not-complete' (default, hides Completed) | '' (all) | a specific status.
   let phases = data.projects.filter(p => p.projId !== 1 && p.projId !== 'ADMIN');
-  if (statusFilter) phases = phases.filter(p => p.status === statusFilter);
-  if (pmFilter)     phases = phases.filter(p => p.pm     === pmFilter);
-
-  // Phase keys that have assignments in the visible week
-  const activePhaseKeys = new Set(
-    Object.keys(data.assignments)
-      .filter(k => k.split('|')[2] === week)
-      .map(k => k.split('|')[1])
-  );
-  // Show a phase if it has hours this week OR its project is Active (so Active
-  // projects always appear even with no hours yet, ready for assignment).
-  phases = phases.filter(ph => activePhaseKeys.has(ph._phaseKey) || ph.status === 'Active');
+  if (statusFilter === 'not-complete') phases = phases.filter(p => !/^complete/i.test(p.status || ''));
+  else if (statusFilter)               phases = phases.filter(p => p.status === statusFilter);
+  if (pmFilter)                        phases = phases.filter(p => p.pm === pmFilter);
+  // Every matching project is shown (regardless of whether it has hours this week),
+  // so you can assign hours to any of them for the selected week.
 
   const todayStr = new Date().toISOString().split('T')[0];
   const today    = new Date(todayStr + 'T00:00:00');
@@ -5627,8 +5659,14 @@ function renderProjectMatrix() {
     html += `<td style="text-align:center;background:rgba(0,112,108,0.03);padding:4px">
       <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;${priStyle}">${priLabel}</span>
     </td>`;
+    const _pstatus = getProjectStatus(g.projId);
+    const _statusList = ['Active','Not Started','On Hold','Complete'];
+    if (_pstatus && !_statusList.includes(_pstatus)) _statusList.push(_pstatus); // keep any existing value visible
+    const _statusOpts = _statusList
+      .map(s => `<option${_pstatus===s?' selected':''}>${s}</option>`).join('');
     html += `<td class="pmatrix-proj-cell" style="font-weight:700;font-size:12px;padding-left:14px">
       <span style="font-family:monospace;font-size:10px;color:var(--text-muted);background:var(--soft-white);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:6px">#${g.projId}</span>${g.projName}
+      <select class="pmatrix-status-select" title="Change project status" onchange="setProjectStatus('${g.projId}', this.value)">${_statusOpts}</select>
       <div style="margin-top:4px;font-weight:400">
         <input class="proj-note-input" maxlength="255" placeholder="Status note..."
           value="${escHtml(getProjectNote(g.projId))}"
@@ -5942,6 +5980,11 @@ function renderDeadlineTable() {
   // Combine, filter, sort
   let all = [...phaseDeadlines, ...milestones];
 
+  // Default to current + future deadlines; "Show past" toggle includes older ones.
+  if (!dlShowPast) {
+    const todayStr = new Date().toISOString().split('T')[0];
+    all = all.filter(r => r.date && r.date >= todayStr);
+  }
   if (teamFilter) all = all.filter(r => r.team === teamFilter);
   if (pmFilter)   all = all.filter(r => r.pm   === pmFilter);
   if (search) {
